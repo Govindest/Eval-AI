@@ -3,4 +3,3 @@ token.json
 .env
 __pycache__/
 *.py[cod]
-llama_test.ipynb
