@@ -1,0 +1,113 @@
+
+
+
+#test libraries 
+import unittest
+from unittest.mock import patch, Mock
+
+
+
+import os.path
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+import pandas as pd
+import numpy as np
+
+# Define a class for interacting with the Google Sheets API - BASE Code
+class SheetsAPI:
+    # Initialize the class with default or provided scopes
+    def __init__(self, scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']):
+        self.scopes = scopes  # Define the API scopes
+        self.creds = self.configure_credentials()  # Set up the credentials
+
+    # Method to configure the OAuth2 credentials
+    def configure_credentials(self):
+        creds = None  # Start with no credentials
+        # Check if token.json exists and load it if it does
+        if os.path.exists('token.json'):
+            creds = Credentials.from_authorized_user_file('token.json', self.scopes)
+        # If the credentials are not valid or don't exist
+        if not creds or not creds.valid:
+            # Refresh the credentials if possible
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            # Otherwise start a new OAuth2 flow
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    'credentials.json', self.scopes)
+                creds = flow.run_local_server(port=0)
+            # Write the credentials back to token.json
+            with open('token.json', 'w') as token:
+                token.write(creds.to_json())
+        return creds  # Return the credentials
+    
+    # Method to fetch values from a given Google Sheet ID and range
+    def get_sheet_values(self, sheet_id, range):
+        # Build the Sheets API service object
+        service = build('sheets', 'v4', credentials=self.creds)
+        sheet = service.spreadsheets()
+        # Fetch the values from the sheet
+        result = sheet.values().get(spreadsheetId=sheet_id, range=range).execute()
+        values = result.get('values', [])
+        # Raise an error if no data is found
+        if not values:
+            raise ValueError('No data found.')
+        # Convert the values to a pandas DataFrame and return it
+        df = pd.DataFrame(values)
+        return df
+    
+    # Method to convert the DataFrame values to a dictionary format
+    def get_dict_from_sheet_values(self, values):
+        # Extract the students and notes from the values
+        students = list(values.drop(0, axis=1).iloc[0])
+        notes = values.drop(0, axis=1).iloc[1:]
+        notes = [list(notes[col]) for col in notes.columns]
+        # Create and return the dictionary mapping students to their notes
+        return {student: note for student, note in zip(students, notes)}
+
+#RUN TEST - REMINDER TO ME
+# Test Code
+
+class TestSheetsAPI(unittest.TestCase):
+
+    # Setup method to create a SheetsAPI instance before each test
+    def setUp(self):
+        self.api = SheetsAPI()
+
+    # Test if credentials are configured correctly
+    def test_configure_credentials(self):
+        with patch('os.path.exists', return_value=True):
+            with patch('google.oauth2.credentials.Credentials.from_authorized_user_file', return_value=Mock(valid=True)):
+                creds = self.api.configure_credentials()
+                self.assertIsNotNone(creds)
+
+    # Test the get_sheet_values method
+    @patch('googleapiclient.discovery.build')
+    def test_get_sheet_values(self, mock_build):
+        mock_values = [['Student', 'Note1', 'Note2'], ['Alice', 'Math', 'Science'], ['Bob', 'History', 'Geography']]
+        mock_build.return_value.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {'values': mock_values}
+
+        df = self.api.get_sheet_values('sheet_id', 'A1:C3')
+        self.assertEqual(df.iloc[0, 0], 'Student')
+        self.assertEqual(df.iloc[1, 1], 'Math')
+
+    # Test the get_dict_from_sheet_values method
+    def test_get_dict_from_sheet_values(self):
+        values = pd.DataFrame([['Student', 'Note1', 'Note2'], ['Alice', 'Math', 'Science'], ['Bob', 'History', 'Geography']])
+        notes_dict = self.api.get_dict_from_sheet_values(values)
+        self.assertEqual(notes_dict['Alice'], ['Math', 'Science'])
+        self.assertEqual(notes_dict['Bob'], ['History', 'Geography'])
+
+    # Test exception for no data found
+    @patch('googleapiclient.discovery.build')
+    def test_no_data_found_exception(self, mock_build):
+        mock_build.return_value.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {'values': []}
+        with self.assertRaises(ValueError):
+            self.api.get_sheet_values('sheet_id', 'A1:C3')
+
+# Runs test :)
+if __name__ == '__main__':
+    unittest.main()
